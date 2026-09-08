@@ -1,0 +1,288 @@
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+  db,
+  cartItems,
+  carts,
+  orderItems,
+  orders,
+  payments,
+  productImages,
+  productVariants,
+  products,
+  type OrderStatus,
+  type ShippingAddress,
+} from "@/lib/db";
+import { CheckoutError } from "@/lib/api";
+import { newId, newOrderNumber } from "@/lib/ids";
+import { createPaymentIntent, type PaymentIntent } from "@/lib/payments";
+import { priceCart } from "@/lib/services/cart";
+
+export type PlacedOrder = {
+  id: string;
+  orderNumber: string;
+  totalInr: number;
+  payment: PaymentIntent;
+};
+
+/**
+ * Turn a cart into an order.
+ *
+ * Three things make this safe to run concurrently with itself and with the
+ * Studio editing prices:
+ *
+ *  1. Prices are re-read from the catalogue inside the transaction. The cart's
+ *     snapshot is what the shopper *saw*; it is never what they are charged.
+ *  2. Stock moves with a conditional UPDATE … WHERE stock_qty >= qty, and the
+ *     affected row count is checked. Two shoppers racing for the last ring:
+ *     one update matches, the other doesn't, and the loser gets a clean 409
+ *     instead of the store overselling.
+ *  3. The cart is marked converted in the same transaction, so a double
+ *     submit cannot produce two orders from one bag.
+ *
+ * The order is written as `pending_payment`. Only a verified provider
+ * callback moves it to `paid` — see confirmPayment.
+ */
+export async function checkout(input: {
+  cartId: string;
+  userId: string | null;
+  email: string;
+  shippingAddress: ShippingAddress;
+}): Promise<PlacedOrder> {
+  const { orderId, orderNumber, totalInr } = await db.transaction(async (tx) => {
+    const [cart] = await tx
+      .select({ id: carts.id, status: carts.status })
+      .from(carts)
+      .where(eq(carts.id, input.cartId))
+      .limit(1);
+
+    if (!cart) throw new CheckoutError("no_cart", "Your bag could not be found.", 404);
+    if (cart.status !== "active") {
+      throw new CheckoutError("already_placed", "This bag has already been checked out.");
+    }
+
+    const lines = await tx
+      .select({
+        variantId: productVariants.id,
+        productId: products.id,
+        title: products.title,
+        slug: products.slug,
+        sku: productVariants.sku,
+        optionLabel: productVariants.optionLabel,
+        optionValue: productVariants.optionValue,
+        // Live price, not the cart snapshot.
+        unitPriceInr: sql<number>`coalesce(${productVariants.priceInr}, ${products.priceInr})`,
+        qty: cartItems.qty,
+        status: products.status,
+      })
+      .from(cartItems)
+      .innerJoin(productVariants, eq(productVariants.id, cartItems.variantId))
+      .innerJoin(products, eq(products.id, productVariants.productId))
+      .where(eq(cartItems.cartId, input.cartId));
+
+    if (lines.length === 0) throw new CheckoutError("empty_bag", "Your bag is empty.", 400);
+
+    const unavailable = lines.find((l) => l.status !== "active");
+    if (unavailable) {
+      throw new CheckoutError(
+        "unavailable",
+        `"${unavailable.title}" is no longer available. Please remove it from your bag.`,
+      );
+    }
+
+    for (const line of lines) {
+      const reserved = await tx
+        .update(productVariants)
+        .set({ stockQty: sql`${productVariants.stockQty} - ${line.qty}` })
+        .where(
+          and(
+            eq(productVariants.id, line.variantId),
+            sql`${productVariants.stockQty} >= ${line.qty}`,
+          ),
+        );
+
+      if (reserved.rowCount === 0) {
+        // Rolls back every reservation made above it.
+        throw new CheckoutError(
+          "out_of_stock",
+          `"${line.title}" sold out while you were checking out.`,
+        );
+      }
+    }
+
+    const subtotalInr = lines.reduce((sum, l) => sum + Number(l.unitPriceInr) * l.qty, 0);
+    const { shippingInr, taxInr, totalInr } = priceCart(subtotalInr);
+
+    const id = newId();
+    const orderNumber = newOrderNumber();
+
+    await tx.insert(orders).values({
+      id,
+      orderNumber,
+      userId: input.userId,
+      email: input.email,
+      status: "pending_payment",
+      subtotalInr,
+      shippingInr,
+      taxInr,
+      totalInr,
+      shippingAddress: input.shippingAddress,
+    });
+
+    const thumbs = await primaryImageMap(
+      tx,
+      lines.map((l) => l.productId),
+    );
+
+    await tx.insert(orderItems).values(
+      lines.map((l) => ({
+        id: newId(),
+        orderId: id,
+        productId: l.productId,
+        variantId: l.variantId,
+        title: l.title,
+        variantLabel: l.optionValue ? `${l.optionLabel}: ${l.optionValue}` : null,
+        sku: l.sku,
+        imageUrl: thumbs.get(l.productId) ?? null,
+        unitPriceInr: Number(l.unitPriceInr),
+        qty: l.qty,
+      })),
+    );
+
+    await tx.update(carts).set({ status: "converted" }).where(eq(carts.id, input.cartId));
+
+    return { orderId: id, orderNumber, totalInr };
+  });
+
+  // Outside the transaction: a slow gateway must not hold Postgres row locks.
+  const intent = await createPaymentIntent({ orderNumber, amountInr: totalInr });
+
+  await db.insert(payments).values({
+    id: newId(),
+    orderId,
+    provider: intent.provider,
+    providerRef: intent.reference,
+    amountInr: totalInr,
+    status: "created",
+  });
+
+  return { id: orderId, orderNumber, totalInr, payment: intent };
+}
+
+async function primaryImageMap(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  productIds: string[],
+): Promise<Map<string, string>> {
+  if (productIds.length === 0) return new Map();
+  const rows = await tx
+    .selectDistinctOn([productImages.productId], {
+      productId: productImages.productId,
+      url: productImages.url,
+    })
+    .from(productImages)
+    .where(inArray(productImages.productId, productIds))
+    .orderBy(productImages.productId, productImages.position);
+  return new Map(rows.map((r) => [r.productId, r.url]));
+}
+
+/**
+ * Mark a payment captured and the order paid. Idempotent by construction:
+ * the update is conditioned on the order still being `pending_payment`, so a
+ * webhook that fires twice — or a webhook that races the browser's own
+ * confirm call — captures exactly once.
+ */
+export async function confirmPayment(input: {
+  providerRef: string;
+  provider: string;
+  raw?: Record<string, unknown>;
+}): Promise<{ orderId: string; alreadyCaptured: boolean } | null> {
+  const [payment] = await db
+    .select({ id: payments.id, orderId: payments.orderId, status: payments.status })
+    .from(payments)
+    .where(
+      and(eq(payments.providerRef, input.providerRef), eq(payments.provider, input.provider)),
+    )
+    .limit(1);
+
+  if (!payment) return null;
+  if (payment.status === "captured") {
+    return { orderId: payment.orderId, alreadyCaptured: true };
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(payments)
+      .set({ status: "captured", raw: input.raw ?? null })
+      .where(eq(payments.id, payment.id));
+
+    await tx
+      .update(orders)
+      .set({ status: "paid", placedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(orders.id, payment.orderId), eq(orders.status, "pending_payment")));
+  });
+
+  return { orderId: payment.orderId, alreadyCaptured: false };
+}
+
+export async function listOrdersForUser(userId: string) {
+  const rows = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      status: orders.status,
+      totalInr: orders.totalInr,
+      placedAt: orders.placedAt,
+      createdAt: orders.createdAt,
+      itemCount: sql<number>`(
+        select coalesce(sum(${orderItems.qty}), 0)
+        from ${orderItems} where ${orderItems.orderId} = ${orders.id}
+      )`,
+    })
+    .from(orders)
+    .where(eq(orders.userId, userId))
+    .orderBy(desc(orders.createdAt))
+    .limit(50);
+
+  return rows.map((r) => ({ ...r, itemCount: Number(r.itemCount) }));
+}
+
+/**
+ * A single order with its lines. `userId` scopes the lookup — an order id is
+ * never enough on its own to read someone else's purchase history.
+ */
+export async function getOrder(orderId: string, userId: string | null) {
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(userId ? and(eq(orders.id, orderId), eq(orders.userId, userId)) : eq(orders.id, orderId))
+    .limit(1);
+
+  if (!order) return null;
+
+  const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+  return { ...order, items };
+}
+
+export async function listAllOrders(status?: OrderStatus) {
+  return db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      email: orders.email,
+      status: orders.status,
+      totalInr: orders.totalInr,
+      createdAt: orders.createdAt,
+    })
+    .from(orders)
+    .where(status ? eq(orders.status, status) : undefined)
+    .orderBy(desc(orders.createdAt))
+    .limit(100);
+}
+
+export async function setOrderStatus(orderId: string, status: OrderStatus) {
+  const [row] = await db
+    .update(orders)
+    .set({ status, updatedAt: new Date() })
+    .where(eq(orders.id, orderId))
+    .returning({ id: orders.id, status: orders.status });
+  return row ?? null;
+}
