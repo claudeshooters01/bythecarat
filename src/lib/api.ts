@@ -38,6 +38,11 @@ export function handle<Args extends unknown[]>(
       if (err instanceof CheckoutError) {
         return apiError(err.status, err.code, err.message);
       }
+      // Postgres unique_violation — a slug or SKU already in use. An expected
+      // editing mistake, not a server fault.
+      if (isUniqueViolation(err)) {
+        return apiError(409, "already_exists", "Something with that slug or SKU already exists.");
+      }
       console.error("[api] unhandled error:", err);
       return apiError(500, "internal", "Something went wrong. Please try again.");
     }
@@ -58,4 +63,17 @@ export class CheckoutError extends Error {
     super(message);
     this.name = "CheckoutError";
   }
+}
+
+/**
+ * Postgres unique_violation (23505). Drizzle wraps driver errors, so the code
+ * we want is on the cause chain rather than the thrown object — walking it is
+ * the difference between a clean 409 and a mystery 500.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  for (let e = err, depth = 0; e && depth < 5; depth++) {
+    if (typeof e === "object" && e !== null && "code" in e && e.code === "23505") return true;
+    e = typeof e === "object" && e !== null && "cause" in e ? e.cause : null;
+  }
+  return false;
 }

@@ -224,6 +224,18 @@ export async function confirmPayment(input: {
 }
 
 export async function listOrdersForUser(userId: string) {
+  // Derived table + join rather than a correlated subquery in sql``: raw
+  // templates emit unqualified column names, so the correlation would compare
+  // order_items.order_id to order_items.id and always count zero.
+  const counts = db
+    .select({
+      orderId: orderItems.orderId,
+      total: sql<number>`sum(${orderItems.qty})`.as("total"),
+    })
+    .from(orderItems)
+    .groupBy(orderItems.orderId)
+    .as("counts");
+
   const rows = await db
     .select({
       id: orders.id,
@@ -232,12 +244,10 @@ export async function listOrdersForUser(userId: string) {
       totalInr: orders.totalInr,
       placedAt: orders.placedAt,
       createdAt: orders.createdAt,
-      itemCount: sql<number>`(
-        select coalesce(sum(${orderItems.qty}), 0)
-        from ${orderItems} where ${orderItems.orderId} = ${orders.id}
-      )`,
+      itemCount: sql<number>`coalesce(${counts.total}, 0)`,
     })
     .from(orders)
+    .leftJoin(counts, eq(counts.orderId, orders.id))
     .where(eq(orders.userId, userId))
     .orderBy(desc(orders.createdAt))
     .limit(50);

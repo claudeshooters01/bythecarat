@@ -24,6 +24,11 @@ drop `DATABASE_POOL_MAX` from `.env`.
 
 Seeded staff login: `studio@bythecarat.in` / `carat12345` → `/studio`.
 
+The Studio covers the catalogue end to end: create and edit products, drag-free
+image upload with cover selection and reordering, per-variant stock (each ring
+size separately), archive, and order fulfilment. Uploads go to Vercel Blob when
+`BLOB_READ_WRITE_TOKEN` is set and to `./data/uploads` otherwise.
+
 ## Scripts
 
 | Script | Does |

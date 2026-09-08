@@ -70,6 +70,24 @@ export const wishlistSchema = z.object({
 
 /* ── Studio (staff) ── */
 
+/**
+ * An image is either an absolute https URL (Vercel Blob, or a stock photo) or
+ * a local upload path minted by /api/v1/uploads. Anything else — including
+ * http:// and javascript: — is rejected, so a compromised Studio session
+ * cannot inject an arbitrary URL into the storefront.
+ */
+const imageUrlSchema = z
+  .string()
+  .trim()
+  .max(2000)
+  .refine(
+    (s) =>
+      /^https:\/\/.+/.test(s) ||
+      /^\/uploads\/[0-9a-f-]{36}\.(jpg|png|webp)$/.test(s),
+    "Images must be an uploaded file or an https URL",
+  );
+
+
 export const productWriteSchema = z.object({
   slug: z
     .string()
@@ -89,10 +107,24 @@ export const productWriteSchema = z.object({
   compareAt: z.coerce.number().min(0).max(100_000_000).optional(),
   metal: z.string().trim().max(40).optional().or(z.literal("").transform(() => undefined)),
   attributes: z.record(z.string().max(60), z.string().max(200)).default({}),
-  imageUrls: z.array(z.string().trim().url().max(2000)).max(8).default([]),
+  imageUrls: z.array(imageUrlSchema).max(8).default([]),
   status: z.enum(PRODUCT_STATUSES).default("draft"),
   isFeatured: z.coerce.boolean().default(false),
   stockQty: z.coerce.number().int().min(0).max(100000).default(0),
+  /**
+   * Per-variant stock, sent when editing a product that has real variants
+   * (ring sizes). A single `stockQty` cannot represent five sizes, and
+   * pretending otherwise silently overwrites one size and leaves the rest.
+   */
+  variantStock: z
+    .array(
+      z.object({
+        id: z.string().trim().min(1).max(64),
+        stockQty: z.coerce.number().int().min(0).max(100000),
+      }),
+    )
+    .max(50)
+    .optional(),
 });
 
 export const orderStatusSchema = z.object({

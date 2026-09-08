@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ProductForm } from "@/components/studio/ProductForm";
+import { ProductForm, type EditableProduct } from "@/components/studio/ProductForm";
 import { OrderStatusBadge } from "@/components/OrderStatusBadge";
 import { api, ApiError } from "@/lib/client";
 import { formatInr } from "@/lib/money";
@@ -38,8 +38,31 @@ export function StudioDashboard({
 }) {
   const [tab, setTab] = useState<"catalogue" | "orders">("catalogue");
   const [creating, setCreating] = useState(false);
+  // The full product is fetched on demand rather than held for all 200 rows —
+  // the table only needs a summary, and drafts must be openable too.
+  const [editing, setEditing] = useState<EditableProduct | null>(null);
+  const [loadingEdit, setLoadingEdit] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
+
+  async function startEditing(id: string) {
+    setError(null);
+    setLoadingEdit(id);
+    try {
+      const full = await api<EditableProduct>(`/api/v1/studio/products/${id}`);
+      setCreating(false);
+      setEditing(full);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not open that product.");
+    } finally {
+      setLoadingEdit(null);
+    }
+  }
+
+  function closeForm() {
+    setCreating(false);
+    setEditing(null);
+  }
 
   async function archive(id: string) {
     setError(null);
@@ -76,7 +99,10 @@ export function StudioDashboard({
         {tab === "catalogue" && (
           <button
             type="button"
-            onClick={() => setCreating((v) => !v)}
+            onClick={() => {
+              setEditing(null);
+              setCreating((v) => !v);
+            }}
             className="ml-auto rounded-full bg-royal-600 px-5 py-2 text-sm font-semibold text-on-accent hover:bg-royal-700"
           >
             {creating ? "Close" : "New product"}
@@ -92,11 +118,15 @@ export function StudioDashboard({
 
       {tab === "catalogue" && (
         <>
-          {creating && (
+          {(creating || editing) && (
             <ProductForm
+              // Remounts when switching products, so defaultValue prefills reset.
+              key={editing?.id ?? "new"}
               categories={categories}
+              product={editing ?? undefined}
+              onCancel={closeForm}
               onSaved={() => {
-                setCreating(false);
+                closeForm();
                 router.refresh();
               }}
             />
@@ -128,15 +158,25 @@ export function StudioDashboard({
                     </Td>
                     <Td className="capitalize">{product.status}</Td>
                     <Td>
-                      {product.status !== "archived" && (
+                      <div className="flex gap-3">
                         <button
                           type="button"
-                          onClick={() => archive(product.id)}
-                          className="text-xs text-ink-600 underline underline-offset-2 hover:text-danger"
+                          disabled={loadingEdit === product.id}
+                          onClick={() => startEditing(product.id)}
+                          className="text-xs text-royal-600 underline underline-offset-2 hover:text-royal-700 disabled:opacity-50"
                         >
-                          Archive
+                          {loadingEdit === product.id ? "Opening…" : "Edit"}
                         </button>
-                      )}
+                        {product.status !== "archived" && (
+                          <button
+                            type="button"
+                            onClick={() => archive(product.id)}
+                            className="text-xs text-ink-600 underline underline-offset-2 hover:text-danger"
+                          >
+                            Archive
+                          </button>
+                        )}
+                      </div>
                     </Td>
                   </tr>
                 ))}

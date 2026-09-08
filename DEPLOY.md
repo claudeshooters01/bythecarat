@@ -29,7 +29,7 @@ Import the repo, then set environment variables (Production + Preview):
 | `SITE_URL` | `https://your-domain` |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | From step 2 |
 | `RAZORPAY_WEBHOOK_SECRET` | From step 2 |
-| `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob (optional) |
+| `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob — **required to upload product images** |
 | `UPSTASH_REDIS_REST_URL` / `..._TOKEN` | Optional, recommended |
 
 Do **not** set `DATABASE_POOL_MAX` in production; the default of 5 per instance
@@ -52,6 +52,9 @@ npm run db:seed   # optional: demo catalogue + staff user
 - [ ] The order flips to `paid` **without** anyone calling `/payments/confirm`
 - [ ] Change the seeded staff password, or delete that user and make your own
 - [ ] `AUTH_SECRET` is not the example value (rotating it signs everyone out)
+- [ ] Upload a product image in the Studio and confirm the returned URL is a
+      `blob.vercel-storage.com` address, not `/uploads/…`. A local path means
+      `BLOB_READ_WRITE_TOKEN` is missing and the file will vanish on redeploy.
 
 ## 5. Operational notes
 

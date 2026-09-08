@@ -59,6 +59,15 @@ Known trade-offs, with the seam named:
   and are cached at `/api/v1`.
 - **Emails** (order confirmations) are not wired. `confirmPayment` is the hook.
 
+**A Drizzle footgun worth knowing.** Inside a raw ``sql`` `` template, Drizzle
+emits *unqualified* column names. A correlated subquery like
+``sql`select sum(qty) from ${orderItems} where ${orderItems.orderId} = ${orders.id}` ``
+compiles to `where "order_id" = "id"`, where both sides resolve inside
+`order_items` — so it silently returns zero rather than erroring. Aggregates
+here therefore use a derived table plus a `leftJoin` (see
+`listProductsForStudio` and `listOrdersForUser`), which the query builder
+qualifies correctly.
+
 ## 2. File structure
 
 ```

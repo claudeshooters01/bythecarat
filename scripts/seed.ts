@@ -522,10 +522,12 @@ async function seed() {
       id: newId(),
       email,
       passwordHash: await hashPassword(password),
-      name: "Studio Admin",
+      // Not "Studio Admin": the header greets people by first name, and that
+      // rendered as "Studio Studio" next to the Studio nav link.
+      name: "Meera Nair",
       role: "admin",
     })
-    .onConflictDoNothing({ target: users.email });
+    .onConflictDoUpdate({ target: users.email, set: { name: "Meera Nair", role: "admin" } });
   console.log(`  admin user: ${email}`);
 
   /* Products */
