@@ -148,9 +148,21 @@ enough traffic for that to matter.
 | `RAZORPAY_KEY_SECRET` | From step 3 | **Yes, to take money** |
 | `RAZORPAY_WEBHOOK_SECRET` | From step 7 | **Yes, to take money** |
 | `BLOB_READ_WRITE_TOKEN` | From step 4 | Yes, to upload images |
+| `CRON_SECRET` | `openssl rand -base64 32` | **Yes** — see below |
+| `ORDER_HOLD_MINUTES` | Defaults to `30` | Optional |
 | `UPSTASH_REDIS_REST_URL` | From step 5 | Optional |
 | `UPSTASH_REDIS_REST_TOKEN` | From step 5 | Optional |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | — | **No. Local seeding only** |
+
+**`CRON_SECRET` is not optional.** A scheduled job (declared in `vercel.json`,
+every 10 minutes) cancels orders left unpaid past the hold window and returns
+their stock to the catalogue. Vercel sends the secret as an `Authorization`
+header; without it the route refuses to run, and abandoned checkouts hold
+inventory indefinitely. For one-of-a-kind stock that means a single abandoned
+payment takes a piece off sale permanently.
+
+`ORDER_HOLD_MINUTES` tunes how long an unpaid order holds its stock. Thirty
+minutes suits one-of-a-kind pieces; raise it if you sell from deeper stock.
 
 **Do not set `DATABASE_POOL_MAX`.** It exists for the local PGlite database,
 which accepts one connection at a time. In production the default of 5 per
@@ -204,6 +216,11 @@ Then, in order:
 - [ ] Sign in as a normal customer and visit `/studio` — you must be bounced
       to the homepage
 - [ ] Your staff password is not `carat12345`
+- [ ] Start a checkout, close the payment sheet, and confirm you land on the
+      order page with **Complete payment** and **Cancel this order** — then
+      cancel, and check the piece is back on sale
+- [ ] Vercel → Settings → Cron Jobs lists the release sweep and shows it
+      returning 200
 - [ ] The 16 demo products are archived once your real catalogue is in
 
 ---
@@ -234,9 +251,12 @@ you should decide about each one deliberately:
 - **No transactional email.** Customers get no order confirmation. The order
   page is the only receipt. `confirmPayment()` in
   `src/lib/services/orders.ts` is where an email provider would hook in.
-- **No refund flow.** `orders.status` has `refunded`, and staff can set it,
-  but nothing calls Razorpay's refund API — you would refund from their
-  dashboard and update the status by hand.
+- **Refunds are initiated in Razorpay, not here.** The `refund.processed`
+  webhook now marks the order refunded automatically, but nothing calls
+  Razorpay's refund API, so a member of staff still starts the refund from
+  their dashboard. Stock is deliberately not returned on refund — a refund
+  says money moved, not that the piece is back and fit to resell; restock it
+  in the Studio once it physically returns.
 - **No GST invoice generation.** Tax is calculated and stored per order, but
   no invoice document is produced.
 - **Search is `ILIKE`.** Fine to roughly 100k products. The swap point is one

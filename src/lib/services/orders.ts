@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import {
   db,
   cartItems,
@@ -223,6 +223,172 @@ export async function confirmPayment(input: {
   return { orderId: payment.orderId, alreadyCaptured: false };
 }
 
+/**
+ * Cancel an unpaid order and put its stock back.
+ *
+ * The status guard is the whole safety mechanism: the UPDATE only matches
+ * while the order is still `pending_payment`, so this can be called twice, or
+ * race a webhook capture, without ever restocking a paid order or handing
+ * inventory back twice. Returns false when there was nothing to cancel.
+ */
+export async function cancelPendingOrder(orderId: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [cancelled] = await tx
+      .update(orders)
+      .set({ status: "cancelled", updatedAt: new Date() })
+      .where(and(eq(orders.id, orderId), eq(orders.status, "pending_payment")))
+      .returning({ id: orders.id });
+
+    if (!cancelled) return false;
+
+    const items = await tx
+      .select({ variantId: orderItems.variantId, qty: orderItems.qty })
+      .from(orderItems)
+      .where(eq(orderItems.orderId, orderId));
+
+    for (const item of items) {
+      // Null variantId means the product was archived after purchase; there is
+      // nothing left to restock.
+      if (!item.variantId) continue;
+      await tx
+        .update(productVariants)
+        .set({ stockQty: sql`${productVariants.stockQty} + ${item.qty}` })
+        .where(eq(productVariants.id, item.variantId));
+    }
+
+    return true;
+  });
+}
+
+/**
+ * Sweeper for abandoned checkouts.
+ *
+ * Stock is reserved when the order is written, before the payment sheet
+ * opens — otherwise two people could pay for the same piece. The cost of that
+ * choice is that someone who closes the sheet holds inventory, which for
+ * one-of-a-kind stock (`stock: 1` antique watches) would otherwise take the
+ * piece off sale permanently. This gives it back.
+ */
+export async function releaseAbandonedOrders(
+  olderThanMinutes = 30,
+): Promise<{ examined: number; released: number }> {
+  const cutoff = new Date(Date.now() - olderThanMinutes * 60_000);
+
+  const stale = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(and(eq(orders.status, "pending_payment"), lt(orders.createdAt, cutoff)))
+    // Bounded so one run cannot hold the database for minutes; the next tick
+    // picks up whatever is left.
+    .limit(100);
+
+  let released = 0;
+  for (const order of stale) {
+    if (await cancelPendingOrder(order.id)) released += 1;
+  }
+  return { examined: stale.length, released };
+}
+
+/**
+ * A fresh payment intent for an order that is still awaiting payment — the
+ * "complete payment" path after a dismissed or failed attempt. Each attempt
+ * gets its own `payments` row, so the gateway's history and ours agree.
+ */
+export async function createRetryIntent(orderId: string): Promise<PlacedOrder | null> {
+  const [order] = await db
+    .select({
+      id: orders.id,
+      orderNumber: orders.orderNumber,
+      totalInr: orders.totalInr,
+      status: orders.status,
+    })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+
+  if (!order || order.status !== "pending_payment") return null;
+
+  const intent = await createPaymentIntent({
+    orderNumber: order.orderNumber,
+    amountInr: order.totalInr,
+  });
+
+  await db.insert(payments).values({
+    id: newId(),
+    orderId: order.id,
+    provider: intent.provider,
+    providerRef: intent.reference,
+    amountInr: order.totalInr,
+    status: "created",
+  });
+
+  return {
+    id: order.id,
+    orderNumber: order.orderNumber,
+    totalInr: order.totalInr,
+    payment: intent,
+  };
+}
+
+/**
+ * A gateway-reported failure. Marks the attempt failed and releases the order,
+ * so a declined card does not quietly hold a piece for half an hour.
+ */
+export async function failPayment(input: {
+  providerRef: string;
+  provider: string;
+  raw?: Record<string, unknown>;
+}): Promise<{ orderId: string } | null> {
+  const [payment] = await db
+    .select({ id: payments.id, orderId: payments.orderId })
+    .from(payments)
+    .where(and(eq(payments.providerRef, input.providerRef), eq(payments.provider, input.provider)))
+    .limit(1);
+
+  if (!payment) return null;
+
+  await db
+    .update(payments)
+    .set({ status: "failed", raw: input.raw ?? null })
+    .where(eq(payments.id, payment.id));
+
+  await cancelPendingOrder(payment.orderId);
+  return { orderId: payment.orderId };
+}
+
+/**
+ * A refund confirmed by the gateway. Stock is deliberately NOT returned here:
+ * a refund says money moved, not that the piece is back on the shelf and fit
+ * to resell. Staff restock it in the Studio once it is physically returned
+ * and inspected.
+ */
+export async function refundPayment(input: {
+  providerRef: string;
+  provider: string;
+  raw?: Record<string, unknown>;
+}): Promise<{ orderId: string } | null> {
+  const [payment] = await db
+    .select({ id: payments.id, orderId: payments.orderId })
+    .from(payments)
+    .where(and(eq(payments.providerRef, input.providerRef), eq(payments.provider, input.provider)))
+    .limit(1);
+
+  if (!payment) return null;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(payments)
+      .set({ status: "refunded", raw: input.raw ?? null })
+      .where(eq(payments.id, payment.id));
+    await tx
+      .update(orders)
+      .set({ status: "refunded", updatedAt: new Date() })
+      .where(eq(orders.id, payment.orderId));
+  });
+
+  return { orderId: payment.orderId };
+}
+
 export async function listOrdersForUser(userId: string) {
   // Derived table + join rather than a correlated subquery in sql``: raw
   // templates emit unqualified column names, so the correlation would compare
@@ -256,17 +422,23 @@ export async function listOrdersForUser(userId: string) {
 }
 
 /**
- * A single order with its lines. `userId` scopes the lookup — an order id is
- * never enough on its own to read someone else's purchase history.
+ * A single order with its lines.
+ *
+ * An order id alone is never sufficient — it is a UUID, but treating it as a
+ * bearer token would leak purchase history to anyone who guessed or found
+ * one. Access is granted only to the signed-in owner, or to a guest whose
+ * own httpOnly cookie records that they placed it.
  */
-export async function getOrder(orderId: string, userId: string | null) {
-  const [order] = await db
-    .select()
-    .from(orders)
-    .where(userId ? and(eq(orders.id, orderId), eq(orders.userId, userId)) : eq(orders.id, orderId))
-    .limit(1);
-
+export async function getOrder(
+  orderId: string,
+  access: { userId?: string | null; guestOrderIds?: string[] },
+) {
+  const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
   if (!order) return null;
+
+  const isOwner = Boolean(access.userId) && order.userId === access.userId;
+  const isGuestWhoPlacedIt = access.guestOrderIds?.includes(orderId) ?? false;
+  if (!isOwner && !isGuestWhoPlacedIt) return null;
 
   const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
   return { ...order, items };

@@ -3,27 +3,10 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api, ApiError } from "@/lib/client";
+import { payForOrder, type PlacedOrder } from "@/lib/gateway";
 import { formatInr } from "@/lib/money";
 import { INDIAN_STATES } from "@/lib/states";
 import type { CartSummary } from "@/lib/services/cart";
-
-type PlacedOrder = {
-  id: string;
-  orderNumber: string;
-  totalInr: number;
-  payment: {
-    provider: "razorpay" | "mock";
-    reference: string;
-    amountInr: number;
-    publicKey: string | null;
-  };
-};
-
-declare global {
-  interface Window {
-    Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
-  }
-}
 
 /**
  * Checkout is deliberately one page: address, then pay. Every extra step
@@ -68,18 +51,19 @@ export function CheckoutForm({
         body: JSON.stringify(payload),
       });
 
-      if (order.payment.provider === "mock") {
-        // No gateway configured: capture straight away so the whole flow is
-        // exercisable locally and in CI.
-        await api("/api/v1/payments/confirm", {
-          method: "POST",
-          body: JSON.stringify({ reference: order.payment.reference }),
-        });
-      } else {
-        await payWithRazorpay(order, payload.email);
+      try {
+        await payForOrder(order, payload.email);
+      } catch (paymentError) {
+        // The order exists and holds stock, but the bag is already converted —
+        // leaving them on an empty checkout page would strand them. Send them
+        // to the order, where they can complete payment or cancel and free
+        // the piece for someone else.
+        router.push(`/orders/${order.id}?payment=failed`);
+        router.refresh();
+        throw paymentError;
       }
 
-      router.push(`/account/orders/${order.id}?placed=1`);
+      router.push(`/orders/${order.id}?placed=1`);
       router.refresh();
     } catch (err) {
       setPending(false);
@@ -212,49 +196,4 @@ function Field({
       />
     </label>
   );
-}
-
-/**
- * Opens the hosted Razorpay widget. Resolves when the shopper completes the
- * payment; the webhook is what actually marks the order paid, so this only
- * needs to know that the sheet closed successfully.
- */
-async function payWithRazorpay(order: PlacedOrder, email: string): Promise<void> {
-  await loadRazorpayScript();
-  if (!window.Razorpay) throw new ApiError("gateway", "Could not reach the payment gateway.", 502);
-
-  await new Promise<void>((resolve, reject) => {
-    const checkout = new window.Razorpay!({
-      key: order.payment.publicKey,
-      amount: order.payment.amountInr,
-      currency: "INR",
-      order_id: order.payment.reference,
-      name: "By The Carat",
-      description: `Order ${order.orderNumber}`,
-      prefill: { email },
-      handler: () => resolve(),
-      modal: {
-        ondismiss: () =>
-          reject(
-            new ApiError(
-              "payment_cancelled",
-              "Payment was cancelled. Your order is saved — you can pay from your order page.",
-              402,
-            ),
-          ),
-      },
-    });
-    checkout.open();
-  });
-}
-
-function loadRazorpayScript(): Promise<void> {
-  if (window.Razorpay) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.onload = () => resolve();
-    script.onerror = () => reject(new ApiError("gateway", "Payment gateway failed to load.", 502));
-    document.head.appendChild(script);
-  });
 }

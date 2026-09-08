@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { OrderStatusBadge } from "@/components/OrderStatusBadge";
 import { getSession } from "@/lib/auth";
 import { brand } from "@/lib/brand";
 import { formatInr } from "@/lib/money";
+import { CompletePayment } from "@/components/CompletePayment";
+import { readGuestOrderIds } from "@/lib/guest-orders";
 import { getOrder } from "@/lib/services/orders";
 
 export const metadata: Metadata = {
@@ -18,15 +20,15 @@ export default async function OrderPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ placed?: string }>;
+  searchParams: Promise<{ placed?: string; payment?: string }>;
 }) {
-  const user = await getSession();
-  if (!user) redirect("/login");
-
+  const [user, guestOrderIds] = await Promise.all([getSession(), readGuestOrderIds()]);
   const { id } = await params;
-  const { placed } = await searchParams;
+  const { placed, payment } = await searchParams;
 
-  const order = await getOrder(id, user.id);
+  // Deliberately not behind the /account gate: guests check out here too, and
+  // getOrder authorises against the session or the guest's own cookie.
+  const order = await getOrder(id, { userId: user?.id, guestOrderIds });
   if (!order) notFound();
 
   const address = order.shippingAddress;
@@ -59,15 +61,22 @@ export default async function OrderPage({
       </div>
 
       {order.status === "pending_payment" && (
-        <p className="mt-6 rounded-lg bg-gold-100 px-4 py-3 text-sm text-ink-900">
-          We are still waiting on confirmation from your bank. This page updates automatically
-          once the payment clears — no need to pay again. If it has been more than an hour, write
-          to{" "}
-          <a href={`mailto:${brand.supportEmail}`} className="underline">
-            {brand.supportEmail}
-          </a>
-          .
-        </p>
+        <>
+          {payment === "failed" && (
+            <p className="mt-6 rounded-lg bg-gold-100 px-4 py-3 text-sm text-ink-900">
+              Your payment did not go through. Nothing has been charged.
+            </p>
+          )}
+          <CompletePayment orderId={order.id} email={order.email} totalInr={order.totalInr} />
+          <p className="mt-3 text-xs text-ink-400">
+            Already paid and still seeing this? Bank confirmation can take a few minutes. If it
+            has been more than an hour, write to{" "}
+            <a href={`mailto:${brand.supportEmail}`} className="underline">
+              {brand.supportEmail}
+            </a>
+            .
+          </p>
+        </>
       )}
 
       <ul className="mt-8 divide-y divide-line rounded-xl border border-line bg-card">
@@ -128,9 +137,15 @@ export default async function OrderPage({
         </section>
       </div>
 
-      <Link href="/account" className="mt-10 inline-block text-sm text-royal-600 hover:underline">
-        ← All orders
-      </Link>
+      {user ? (
+        <Link href="/account" className="mt-10 inline-block text-sm text-royal-600 hover:underline">
+          ← All orders
+        </Link>
+      ) : (
+        <Link href="/" className="mt-10 inline-block text-sm text-royal-600 hover:underline">
+          ← Continue shopping
+        </Link>
+      )}
     </div>
   );
 }

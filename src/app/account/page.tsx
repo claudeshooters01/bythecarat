@@ -52,7 +52,7 @@ export default async function AccountPage() {
           {orders.map((order) => (
             <li key={order.id}>
               <Link
-                href={`/account/orders/${order.id}`}
+                href={`/orders/${order.id}`}
                 className="flex flex-wrap items-center justify-between gap-3 p-5 hover:bg-royal-50/50"
               >
                 <div>

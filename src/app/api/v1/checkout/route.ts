@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
 import { readCart } from "@/lib/services/cart";
 import { checkout } from "@/lib/services/orders";
+import { rememberGuestOrder } from "@/lib/guest-orders";
 import { checkoutSchema } from "@/lib/validators";
 
 /**
@@ -31,6 +32,9 @@ export const POST = handle(async (req: Request) => {
     email: input.email,
     shippingAddress: input.shippingAddress,
   });
+
+  // Lets a guest return to this order to pay, cancel or read it.
+  if (!user) await rememberGuestOrder(order.id);
 
   return ok(order, { status: 201 });
 });

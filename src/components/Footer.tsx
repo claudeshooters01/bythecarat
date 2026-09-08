@@ -24,7 +24,7 @@ const columns = [
     title: "Account",
     links: [
       { href: "/account", label: "My account" },
-      { href: "/account/orders", label: "Order history" },
+      { href: "/account", label: "Order history" },
       { href: "/account/wishlist", label: "Wishlist" },
       { href: "/cart", label: "Bag" },
     ],
