@@ -15,6 +15,8 @@ import {
 import { CheckoutError } from "@/lib/api";
 import { newId, newOrderNumber } from "@/lib/ids";
 import { createPaymentIntent, type PaymentIntent } from "@/lib/payments";
+import { sendEmail } from "@/lib/email";
+import { orderConfirmationEmail } from "@/lib/emails/order-confirmation";
 import { priceCart } from "@/lib/services/cart";
 
 export type PlacedOrder = {
@@ -220,7 +222,29 @@ export async function confirmPayment(input: {
       .where(and(eq(orders.id, payment.orderId), eq(orders.status, "pending_payment")));
   });
 
+  // Sent here rather than at checkout, so the receipt only goes out for money
+  // actually taken. Reached exactly once: the early return above means a
+  // redelivered webhook, or the browser racing it, never gets this far.
+  await sendConfirmationEmail(payment.orderId);
+
   return { orderId: payment.orderId, alreadyCaptured: false };
+}
+
+/**
+ * Best-effort receipt. A mail provider being slow or down must never fail a
+ * payment webhook — Razorpay would retry it, and the customer's money has
+ * already moved. Failures are logged for follow-up instead.
+ */
+async function sendConfirmationEmail(orderId: string): Promise<void> {
+  try {
+    const [order] = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (!order) return;
+
+    const items = await db.select().from(orderItems).where(eq(orderItems.orderId, orderId));
+    await sendEmail(orderConfirmationEmail({ ...order, items }));
+  } catch (err) {
+    console.error(`[orders] confirmation email failed for ${orderId}:`, err);
+  }
 }
 
 /**

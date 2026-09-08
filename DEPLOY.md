@@ -94,12 +94,34 @@ PGlite, so day-to-day development cannot touch production data.
 
 ---
 
-## 3. Payments — Razorpay
+## 3. Before KYC: your legal identity and policy pages
+
+Razorpay reviews your live website before activating an account, and expects
+Terms, Privacy, Refund/Cancellation and Shipping policies plus contact details
+to be publicly reachable. Those pages exist at `/terms`, `/privacy`,
+`/refund-policy`, `/shipping-policy` and `/contact`, linked from every page's
+footer.
+
+**They contain placeholders you must replace.** Open `src/lib/brand.ts` and
+fill in the `legal` block — entity name, registered address, GSTIN, CIN. Every
+value is prefixed `[REPLACE]` and renders on the pages exactly as written, so a
+reviewer will see them if you forget.
+
+Read the policy wording too. It was drafted to match how this store is built
+and how the copy elsewhere on the site describes the business — 30-day returns,
+lifetime exchange, insured signature-on-delivery shipping, no COD. **Every one
+of those is a promise you have to keep.** Have someone qualified review the
+final wording; it is a starting point, not legal advice.
+
+Deploy to the free `*.vercel.app` URL first (steps 6–7 work without a custom
+domain) so these pages are live when Razorpay reviews you. Do not wait for DNS.
+
+## 4. Payments — Razorpay
 
 1. Complete KYC and activate the account. Until then you only have test keys.
 2. **Settings → API Keys** → generate. You get a Key ID and a Key Secret. The
    secret is shown once — store it somewhere safe.
-3. Leave the webhook for step 7; it needs your live domain.
+3. Leave the webhook for step 8; it needs your live domain.
 
 **This is the one thing that must not be skipped.** With no Razorpay keys the
 app falls back to a mock provider that marks every order paid instantly. That
@@ -108,7 +130,7 @@ would ship a store that gives jewellery away. Step 8 verifies this explicitly.
 
 ---
 
-## 4. Image storage — Vercel Blob
+## 5. Image storage — Vercel Blob
 
 In Vercel: **Storage → Blob → Create**, then copy the read/write token.
 
@@ -119,7 +141,7 @@ read-only. Images would appear to upload and then vanish on the next deploy.
 
 ---
 
-## 5. Rate limiting — Upstash (optional, recommended)
+## 6. Rate limiting — Upstash (optional, recommended)
 
 Create an [Upstash](https://upstash.com) Redis database and copy the **REST**
 URL and token.
@@ -130,7 +152,7 @@ enough traffic for that to matter.
 
 ---
 
-## 6. Deploy to Vercel
+## 7. Deploy to Vercel
 
 1. **Add New → Project**, import `claudeshooters01/bythecarat`.
 2. Framework preset: Next.js. Build command, output directory and install
@@ -144,14 +166,16 @@ enough traffic for that to matter.
 | `AUTH_SECRET` | `openssl rand -base64 32` | **Yes** |
 | `DATABASE_URL` | Neon **pooled** string | **Yes** |
 | `SITE_URL` | `https://your-domain.in` | **Yes** |
-| `RAZORPAY_KEY_ID` | From step 3 | **Yes, to take money** |
-| `RAZORPAY_KEY_SECRET` | From step 3 | **Yes, to take money** |
-| `RAZORPAY_WEBHOOK_SECRET` | From step 7 | **Yes, to take money** |
-| `BLOB_READ_WRITE_TOKEN` | From step 4 | Yes, to upload images |
+| `RAZORPAY_KEY_ID` | From step 4 | **Yes, to take money** |
+| `RAZORPAY_KEY_SECRET` | From step 4 | **Yes, to take money** |
+| `RAZORPAY_WEBHOOK_SECRET` | From step 8 | **Yes, to take money** |
+| `BLOB_READ_WRITE_TOKEN` | From step 5 | Yes, to upload images |
 | `CRON_SECRET` | `openssl rand -base64 32` | **Yes** — see below |
+| `RESEND_API_KEY` | resend.com → API Keys | **Yes** — otherwise no receipts |
+| `EMAIL_FROM` | `By The Carat <orders@your-domain.in>` | With the above |
 | `ORDER_HOLD_MINUTES` | Defaults to `30` | Optional |
-| `UPSTASH_REDIS_REST_URL` | From step 5 | Optional |
-| `UPSTASH_REDIS_REST_TOKEN` | From step 5 | Optional |
+| `UPSTASH_REDIS_REST_URL` | From step 6 | Optional |
+| `UPSTASH_REDIS_REST_TOKEN` | From step 6 | Optional |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | — | **No. Local seeding only** |
 
 **`CRON_SECRET` is not optional.** A scheduled job (declared in `vercel.json`,
@@ -172,7 +196,7 @@ instance is what you want.
 
 ---
 
-## 7. Domain and webhook
+## 8. Domain and webhook
 
 1. Vercel → **Settings → Domains** → add your domain, and create the DNS
    records it shows you at your registrar.
@@ -194,7 +218,7 @@ order is ever confirmed.
 
 ---
 
-## 8. Verify — do not skip this
+## 9. Verify — do not skip this
 
 ```bash
 curl https://your-domain.in/api/health
@@ -221,11 +245,16 @@ Then, in order:
       cancel, and check the piece is back on sale
 - [ ] Vercel → Settings → Cron Jobs lists the release sweep and shows it
       returning 200
+- [ ] A test order produces a **confirmation email**. If your Vercel logs show
+      `[email] would send …`, `RESEND_API_KEY` is missing and customers are
+      paying with no receipt
+- [ ] No `[REPLACE]` text appears anywhere on `/terms`, `/privacy`,
+      `/refund-policy`, `/shipping-policy` or `/contact`
 - [ ] The 16 demo products are archived once your real catalogue is in
 
 ---
 
-## 9. Running it
+## 10. Running it
 
 **Backups.** Enable Neon's point-in-time restore. `orders`, `order_items` and
 `payments` are the only rows you cannot reconstruct from anywhere else.
@@ -243,14 +272,14 @@ worth doing before anyone else joins the project.
 
 ---
 
-## 10. Known gaps before real customers
+## 11. Known gaps before real customers
 
 Honest list of what this MVP does not do yet. None of it blocks launch, but
 you should decide about each one deliberately:
 
-- **No transactional email.** Customers get no order confirmation. The order
-  page is the only receipt. `confirmPayment()` in
-  `src/lib/services/orders.ts` is where an email provider would hook in.
+- **Only one email exists** — the order confirmation, sent on payment capture.
+  There is nothing for despatch, delivery, password reset or abandoned bags.
+  `src/lib/email.ts` is the transport seam for adding them.
 - **Refunds are initiated in Razorpay, not here.** The `refund.processed`
   webhook now marks the order refunded automatically, but nothing calls
   Razorpay's refund API, so a member of staff still starts the refund from

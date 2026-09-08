@@ -17,4 +17,22 @@ export const brand = {
   shippingFlatInr: 25000,
   /** GST on gems and jewellery. Basis points, so 300 = 3%. */
   gstBps: 300,
+
+  /*
+   * Legal identity, shown on the policy pages and required by payment
+   * gateways before they will activate an account.
+   *
+   * REPLACE EVERY VALUE MARKED [REPLACE] BEFORE LAUNCH. They are placeholders,
+   * and a gateway reviewing your site will reject them.
+   */
+  legal: {
+    /** Registered entity name, not the trading name. */
+    entityName: "[REPLACE] By The Carat Jewellers Private Limited",
+    /** Full registered address, as filed. */
+    address: "[REPLACE] Registered address, Bengaluru, Karnataka 560025, India",
+    gstin: "[REPLACE] 29AAAAA0000A1Z5",
+    cin: "[REPLACE] U36910KA2026PTC000000",
+    /** Date the current policy wording took effect. */
+    policiesUpdated: "September 2026",
+  },
 } as const;

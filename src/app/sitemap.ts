@@ -15,6 +15,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${siteUrl}/shop/watches`, changeFrequency: "daily", priority: 0.9 },
     { url: `${siteUrl}/collections`, changeFrequency: "weekly", priority: 0.7 },
     { url: `${siteUrl}/about`, changeFrequency: "monthly", priority: 0.5 },
+    { url: `${siteUrl}/contact`, changeFrequency: "yearly", priority: 0.4 },
+    // Indexable on purpose: payment gateways and customers both look for these.
+    { url: `${siteUrl}/terms`, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${siteUrl}/privacy`, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${siteUrl}/refund-policy`, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${siteUrl}/shipping-policy`, changeFrequency: "yearly", priority: 0.3 },
   ];
 
   // A sitemap is a hint, not a contract. If the database is briefly

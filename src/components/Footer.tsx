@@ -17,7 +17,8 @@ const columns = [
       { href: "/about", label: "Our story" },
       { href: "/about#certification", label: "Certification" },
       { href: "/about#care", label: "Care & servicing" },
-      { href: "/about#returns", label: "Returns & exchange" },
+      { href: "/refund-policy", label: "Returns & exchange" },
+      { href: "/contact", label: "Contact us" },
     ],
   },
   {
@@ -29,6 +30,14 @@ const columns = [
       { href: "/cart", label: "Bag" },
     ],
   },
+];
+
+const POLICIES = [
+  { href: "/terms", label: "Terms" },
+  { href: "/privacy", label: "Privacy" },
+  { href: "/refund-policy", label: "Refunds & cancellation" },
+  { href: "/shipping-policy", label: "Shipping" },
+  { href: "/contact", label: "Contact" },
 ];
 
 export function Footer() {
@@ -70,10 +79,23 @@ export function Footer() {
       </div>
 
       <div className="border-t border-line px-4 py-5">
-        <p className="mx-auto w-full max-w-7xl text-xs text-ink-400">
-          © {new Date().getFullYear()} {brand.name}. All diamonds are conflict-free and
-          independently certified. Prices include GST.
-        </p>
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-ink-400">
+            © {new Date().getFullYear()} {brand.legal.entityName}. All diamonds are conflict-free
+            and independently certified. Prices include GST.
+          </p>
+          <nav aria-label="Policies" className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            {POLICIES.map((policy) => (
+              <Link
+                key={policy.href}
+                href={policy.href}
+                className="text-ink-400 hover:text-royal-600"
+              >
+                {policy.label}
+              </Link>
+            ))}
+          </nav>
+        </div>
       </div>
     </footer>
   );
