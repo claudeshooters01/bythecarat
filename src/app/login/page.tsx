@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { AuthForm } from "@/components/AuthForm";
+import { googleEnabled } from "@/lib/oauth";
 
 export const metadata: Metadata = {
   title: "Sign in",
@@ -17,7 +18,7 @@ export default function LoginPage() {
       <div className="mt-8">
         {/* AuthForm reads ?next= via useSearchParams, which needs a boundary. */}
         <Suspense fallback={null}>
-          <AuthForm mode="login" />
+          <AuthForm mode="login" googleEnabled={googleEnabled()} />
         </Suspense>
       </div>
     </div>

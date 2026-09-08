@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { AuthForm } from "@/components/AuthForm";
+import { googleEnabled } from "@/lib/oauth";
 
 export const metadata: Metadata = {
   title: "Create an account",
@@ -16,7 +17,7 @@ export default function SignupPage() {
       </p>
       <div className="mt-8">
         <Suspense fallback={null}>
-          <AuthForm mode="signup" />
+          <AuthForm mode="signup" googleEnabled={googleEnabled()} />
         </Suspense>
       </div>
     </div>

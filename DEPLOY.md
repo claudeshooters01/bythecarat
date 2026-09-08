@@ -141,6 +141,31 @@ read-only. Images would appear to upload and then vanish on the next deploy.
 
 ---
 
+## 6a. Google Sign-In (optional)
+
+In the Google Cloud console: **APIs & Services → Credentials → Create OAuth
+client ID → Web application**. Under *Authorised redirect URIs* add:
+
+```
+https://your-domain.in/api/v1/auth/google/callback
+```
+
+Add the `http://localhost:3000/...` equivalent too if you want it locally.
+The URI must match character for character or Google returns
+`redirect_uri_mismatch`.
+
+Configure the OAuth consent screen, and publish it — while it is in *Testing*
+only accounts you have listed can sign in.
+
+Leaving `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` unset simply hides the
+button; password sign-in is unaffected.
+
+**One thing to know about account linking.** A Google login is matched to an
+existing account by verified email address, so someone who signed up with a
+password and later uses Google lands in the same account rather than a
+duplicate. This is safe only because we require Google's `email_verified`
+claim — the code refuses unverified addresses.
+
 ## 6. Rate limiting — Upstash (optional, recommended)
 
 Create an [Upstash](https://upstash.com) Redis database and copy the **REST**
@@ -172,6 +197,8 @@ enough traffic for that to matter.
 | `BLOB_READ_WRITE_TOKEN` | From step 5 | Yes, to upload images |
 | `CRON_SECRET` | `openssl rand -base64 32` | **Yes** — see below |
 | `RESEND_API_KEY` | resend.com → API Keys | **Yes** — otherwise no receipts |
+| `GOOGLE_CLIENT_ID` | Google Cloud OAuth client | Optional |
+| `GOOGLE_CLIENT_SECRET` | Same client | With the above |
 | `EMAIL_FROM` | `By The Carat <orders@your-domain.in>` | With the above |
 | `ORDER_HOLD_MINUTES` | Defaults to `30` | Optional |
 | `UPSTASH_REDIS_REST_URL` | From step 6 | Optional |
@@ -245,6 +272,9 @@ Then, in order:
       cancel, and check the piece is back on sale
 - [ ] Vercel → Settings → Cron Jobs lists the release sweep and shows it
       returning 200
+- [ ] If Google Sign-In is configured: sign in with it, then check the same
+      account is reused (not duplicated) when signing in with a password on an
+      email that already existed
 - [ ] A test order produces a **confirmation email**. If your Vercel logs show
       `[email] would send …`, `RESEND_API_KEY` is missing and customers are
       paying with no receipt

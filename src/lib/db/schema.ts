@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -61,13 +62,24 @@ export const users = pgTable(
   {
     id: text("id").primaryKey(),
     email: text("email").notNull(),
-    passwordHash: text("password_hash").notNull(),
+    /**
+     * Null for accounts created through Google — they have no password to
+     * hash, and storing a placeholder would make "can this person sign in
+     * with a password?" unanswerable.
+     */
+    passwordHash: text("password_hash"),
+    /** Google's `sub` claim: stable, and unlike email it never changes. */
+    googleId: text("google_id"),
     name: text("name").notNull(),
     phone: text("phone"),
     role: userRoleEnum("role").notNull().default("customer"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("users_email_idx").on(t.email)],
+  (t) => [
+    uniqueIndex("users_email_idx").on(t.email),
+    // Partial: many rows have no google_id, and NULLs must not collide.
+    uniqueIndex("users_google_id_idx").on(t.googleId).where(sql`${t.googleId} is not null`),
+  ],
 );
 
 export const addresses = pgTable(
