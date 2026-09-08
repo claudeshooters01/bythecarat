@@ -42,6 +42,12 @@ size separately), archive, and order fulfilment. Uploads go to Vercel Blob when
 
 ## Documentation
 
+- **[DEPLOY.md](DEPLOY.md) — the complete go-live runbook.** Neon, schema and
+  seeding, Razorpay, Blob storage, Vercel, domain and DNS, a verification
+  checklist, and an honest list of what this MVP does not do yet. Start here
+  when you are ready to launch.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system design, schema, API, UI, and the
   trade-offs behind each.
-- [DEPLOY.md](DEPLOY.md) — Vercel + Neon + Razorpay, start to finish.
+
+Allow 3–7 days for launch: Razorpay business KYC is the long pole, so apply
+before anything else.
