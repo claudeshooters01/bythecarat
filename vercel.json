@@ -3,7 +3,6 @@
   "crons": [
     {
       "path": "/api/cron/release-abandoned-orders",
-      "comment": "Daily, because Vercel's Hobby plan allows no more than one run per day. Stock does not depend on this alone — see releaseExpiredHoldsForVariant in src/lib/services/orders.ts.",
       "schedule": "0 3 * * *"
     }
   ]
