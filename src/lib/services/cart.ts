@@ -9,8 +9,9 @@ import {
   products,
 } from "@/lib/db";
 import { CheckoutError } from "@/lib/api";
-import { brand } from "@/lib/brand";
+import { priceCart } from "@/lib/pricing";
 import { newId, newToken } from "@/lib/ids";
+import { releaseExpiredHoldsForVariant } from "@/lib/services/orders";
 
 const CART_COOKIE = "btc_cart";
 const CART_TTL_SECONDS = 60 * 60 * 24 * 60; // 60 days
@@ -49,24 +50,6 @@ const EMPTY: CartSummary = {
   taxInr: 0,
   totalInr: 0,
 };
-
-/**
- * Order maths in one place. Rendering the bag, quoting checkout and writing
- * the order row all call this, so the number on the button is by construction
- * the number that gets charged.
- */
-export function priceCart(subtotalInr: number): {
-  shippingInr: number;
-  taxInr: number;
-  totalInr: number;
-} {
-  const shippingInr =
-    subtotalInr === 0 || subtotalInr >= brand.freeShippingThresholdInr
-      ? 0
-      : brand.shippingFlatInr;
-  const taxInr = Math.round((subtotalInr * brand.gstBps) / 10_000);
-  return { shippingInr, taxInr, totalInr: subtotalInr + shippingInr + taxInr };
-}
 
 /* ── resolving which cart we are looking at ── */
 
@@ -256,12 +239,29 @@ export async function addToCart(
   if (!variant || variant.status !== "active") {
     throw new CheckoutError("unavailable", "That piece is no longer available.", 404);
   }
-  if (variant.stockQty < input.qty) {
+
+  let available = variant.stockQty;
+
+  if (available < input.qty) {
+    // Before refusing, check whether the shortfall is only abandoned
+    // checkouts still holding this piece past their window. This is the one
+    // moment the answer matters to anybody, and it keeps stock correct
+    // without depending on how often the scheduled sweep is allowed to run.
+    const released = await releaseExpiredHoldsForVariant(input.variantId);
+    if (released > 0) {
+      const [fresh] = await db
+        .select({ stockQty: productVariants.stockQty })
+        .from(productVariants)
+        .where(eq(productVariants.id, input.variantId))
+        .limit(1);
+      available = fresh?.stockQty ?? available;
+    }
+  }
+
+  if (available < input.qty) {
     throw new CheckoutError(
       "out_of_stock",
-      variant.stockQty === 0
-        ? "That piece has just sold out."
-        : `Only ${variant.stockQty} left in stock.`,
+      available === 0 ? "That piece has just sold out." : `Only ${available} left in stock.`,
     );
   }
 
@@ -278,7 +278,7 @@ export async function addToCart(
     .onConflictDoUpdate({
       target: [cartItems.cartId, cartItems.variantId],
       set: {
-        qty: sql`least(${cartItems.qty} + ${input.qty}, ${variant.stockQty})`,
+        qty: sql`least(${cartItems.qty} + ${input.qty}, ${available})`,
         unitPriceInr: Number(variant.priceInr),
       },
     });

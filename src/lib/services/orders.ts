@@ -17,7 +17,7 @@ import { newId, newOrderNumber } from "@/lib/ids";
 import { createPaymentIntent, type PaymentIntent } from "@/lib/payments";
 import { sendEmail } from "@/lib/email";
 import { orderConfirmationEmail } from "@/lib/emails/order-confirmation";
-import { priceCart } from "@/lib/services/cart";
+import { priceCart } from "@/lib/pricing";
 
 export type PlacedOrder = {
   id: string;
@@ -285,6 +285,52 @@ export async function cancelPendingOrder(orderId: string): Promise<boolean> {
 }
 
 /**
+ * How long an unpaid order may hold its stock. Shared by the scheduled sweep
+ * and the opportunistic release below, so the two can never disagree about
+ * when a hold has expired.
+ */
+export function holdWindowMinutes(): number {
+  return Number(process.env.ORDER_HOLD_MINUTES ?? 30);
+}
+
+/**
+ * Release expired holds on one variant, on demand.
+ *
+ * The scheduled sweep is the tidy-up, but it cannot be the guarantee: Vercel's
+ * Hobby plan permits only one cron run per day, which would leave a
+ * one-of-a-kind piece held for up to 24 hours after someone abandoned a
+ * checkout.
+ *
+ * So the release also happens lazily, at the only moment it actually matters —
+ * when a shopper tries to buy something that appears to be out of stock. If
+ * the stock is being held by orders whose window has passed, they are
+ * cancelled and the piece becomes available immediately. Nothing is scanned
+ * unless a real customer is waiting on it.
+ */
+export async function releaseExpiredHoldsForVariant(variantId: string): Promise<number> {
+  const cutoff = new Date(Date.now() - holdWindowMinutes() * 60_000);
+
+  const holders = await db
+    .selectDistinct({ id: orders.id })
+    .from(orders)
+    .innerJoin(orderItems, eq(orderItems.orderId, orders.id))
+    .where(
+      and(
+        eq(orders.status, "pending_payment"),
+        lt(orders.createdAt, cutoff),
+        eq(orderItems.variantId, variantId),
+      ),
+    )
+    .limit(20);
+
+  let released = 0;
+  for (const order of holders) {
+    if (await cancelPendingOrder(order.id)) released += 1;
+  }
+  return released;
+}
+
+/**
  * Sweeper for abandoned checkouts.
  *
  * Stock is reserved when the order is written, before the payment sheet
@@ -294,7 +340,7 @@ export async function cancelPendingOrder(orderId: string): Promise<boolean> {
  * piece off sale permanently. This gives it back.
  */
 export async function releaseAbandonedOrders(
-  olderThanMinutes = 30,
+  olderThanMinutes = holdWindowMinutes(),
 ): Promise<{ examined: number; released: number }> {
   const cutoff = new Date(Date.now() - olderThanMinutes * 60_000);
 

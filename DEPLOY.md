@@ -205,12 +205,23 @@ enough traffic for that to matter.
 | `UPSTASH_REDIS_REST_TOKEN` | From step 6 | Optional |
 | `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | — | **No. Local seeding only** |
 
-**`CRON_SECRET` is not optional.** A scheduled job (declared in `vercel.json`,
-every 10 minutes) cancels orders left unpaid past the hold window and returns
-their stock to the catalogue. Vercel sends the secret as an `Authorization`
-header; without it the route refuses to run, and abandoned checkouts hold
-inventory indefinitely. For one-of-a-kind stock that means a single abandoned
-payment takes a piece off sale permanently.
+**`CRON_SECRET` is not optional.** A scheduled job (declared in `vercel.json`)
+cancels orders left unpaid past the hold window and returns their stock to the
+catalogue. Vercel sends the secret as an `Authorization` header; without it the
+route refuses to run.
+
+The schedule is **daily**, because Vercel's Hobby plan permits at most one cron
+run per day — anything more frequent is rejected and the deployment fails.
+
+Stock correctness does not depend on that schedule. An expired hold is also
+released on demand, at the moment a shopper tries to buy something that appears
+out of stock: if the shortfall is only abandoned checkouts past their window,
+they are cancelled and the piece becomes available immediately. The cron is
+tidy-up for pieces nobody is asking about.
+
+If you move to Pro, tightening `vercel.json` to `*/10 * * * *` is a safe
+change. An external pinger (GitHub Actions, cron-job.org) hitting the route
+with the same bearer token works too.
 
 `ORDER_HOLD_MINUTES` tunes how long an unpaid order holds its stock. Thirty
 minutes suits one-of-a-kind pieces; raise it if you sell from deeper stock.
